@@ -1,8 +1,7 @@
 ---
 linkTitle: LLM cache
 title: LLM Cache
-aliases:
-- /integrate/redisvl/api/cache
+url: '/develop/ai/redisvl/0.26.0/api/cache/'
 ---
 
 

@@ -1,8 +1,7 @@
 ---
 linkTitle: Query types
 title: Query Types
-aliases:
-- /integrate/redisvl/concepts/queries
+url: '/develop/ai/redisvl/0.26.0/concepts/queries/'
 ---
 
 

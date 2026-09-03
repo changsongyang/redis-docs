@@ -1,8 +1,7 @@
 ---
 linkTitle: Command line interface
 title: Command Line Interface
-aliases:
-- /integrate/redisvl/api/cli
+url: '/develop/ai/redisvl/0.26.0/api/cli/'
 ---
 
 

@@ -1,8 +1,7 @@
 ---
 linkTitle: Filter
 title: Filter
-aliases:
-- /integrate/redisvl/api/filter
+url: '/develop/ai/redisvl/0.26.0/api/filter/'
 ---
 
 
