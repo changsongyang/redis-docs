@@ -10,7 +10,7 @@ aliases:
 
 ## Semantic Router
 
-### `class SemanticRouter(name, routes, vectorizer=None, routing_config=None, redis_client=None, redis_url='redis://localhost:6379', overwrite=False, connection_kwargs={}, create_index=True)`
+### `class SemanticRouter(name, routes, vectorizer=None, routing_config=None, redis_client=None, redis_url='redis://localhost:6379', overwrite=False, connection_kwargs=None, create_index=True)`
 
 Semantic Router for managing and querying route vectors.
 
@@ -105,7 +105,7 @@ Delete the semantic router index and its persisted route config.
 * **Return type:**
   None
 
-#### `delete_route_references(route_name='', reference_ids=[], keys=[])`
+#### `delete_route_references(route_name='', reference_ids=None, keys=None)`
 
 Get references for an existing semantic router route.
 
@@ -114,12 +114,34 @@ Get references for an existing semantic router route.
   * **Optional** – The reference or list of references to delete.
   * **Optional** – List of fully qualified keys (prefix:router:reference_id) to delete.
   * **route_name** (*str*)
-  * **reference_ids** (*list* *[* *str* *]*)
-  * **keys** (*list* *[* *str* *]*)
+  * **reference_ids** (*list* *[* *str* *]*  *|* *None*)
+  * **keys** (*list* *[* *str* *]*  *|* *None*)
 * **Returns:**
   Number of objects deleted
 * **Return type:**
   int
+* **Raises:**
+  * **ValueError** – If no references match the given route/ids/keys.
+  * [**PartialDeletionError**]({{< relref "exceptions/#partialdeletionerror" >}}) – If some keys could not be unlinked. Raised only
+        after the surviving references have been reconciled and persisted,
+        so a retry picks up exactly what is left.
+
+{{< note >}}
+Deleting every reference of a route removes the route itself, matching
+[remove_route](#remove_route). A route with no references cannot match anything,
+and [Route](#route) rejects an empty
+reference list, so persisting one would produce a config that
+[from_existing](#from_existing) can no longer load.
+{{< /note >}}
+
+{{< note >}}
+On Redis Cluster keys are unlinked one at a time and a per-key failure
+is logged rather than raised. References whose key failed to unlink are
+deliberately *kept* in the persisted route config: the hash is still in
+the index and the router would keep matching it, so dropping it from
+the config would leave the router claiming a reference is gone while
+still routing to it.
+{{< /note >}}
 
 #### `classmethod from_dict(data, **kwargs)`
 
@@ -191,7 +213,7 @@ Get a route by its name.
 * **Return type:**
   Optional[[Route](#route)]
 
-#### `get_route_references(route_name='', reference_ids=[], keys=[])`
+#### `get_route_references(route_name='', reference_ids=None, keys=None)`
 
 Get references for an existing route route.
 
@@ -199,8 +221,8 @@ Get references for an existing route route.
   * **router_name** (*str*) – The name of the router.
   * **references** (*Union* *[* *str* *,* *List* *[* *str* *]* *]*) – The reference or list of references to add.
   * **route_name** (*str*)
-  * **reference_ids** (*list* *[* *str* *]*)
-  * **keys** (*list* *[* *str* *]*)
+  * **reference_ids** (*list* *[* *str* *]*  *|* *None*)
+  * **keys** (*list* *[* *str* *]*  *|* *None*)
 * **Returns:**
   Reference objects stored
 * **Return type:**
@@ -229,6 +251,12 @@ reads.
 
 * **Parameters:**
   **route_name** (*str*) – Name of the route to remove.
+* **Raises:**
+  [**PartialDeletionError**]({{< relref "exceptions/#partialdeletionerror" >}}) – If some of the route’s reference keys could not
+      be unlinked. The route is then kept with exactly those references
+      and the config persisted before raising, so the router keeps
+      describing what the index can still match and a retry removes the
+      remainder.
 * **Return type:**
   None
 
@@ -382,7 +410,7 @@ self is explicitly positional-only to allow self as a field name.
 
 #### `distance_threshold: Annotated[float, FieldInfo(annotation=NoneType, required=True, metadata=[Strict(strict=True), Gt(gt=0), Le(le=2)])]`
 
-Distance threshold for matching the route.
+Maximum distance for matching the route, inclusive.
 
 #### `metadata: dict[str, Any]`
 
