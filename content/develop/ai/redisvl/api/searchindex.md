@@ -6,17 +6,18 @@ aliases:
 ---
 
 
-| Class                                     | Description                                                                                  |
-|-------------------------------------------|----------------------------------------------------------------------------------------------|
-| [SearchIndex](#searchindex-api)           | Primary class to write, read, and search across data structures in Redis.                    |
-| [AsyncSearchIndex](#asyncsearchindex-api) | Async version of the SearchIndex to write, read, and search across data structures in Redis. |
-| [SearchResults](#searchresults-api)       | List of result documents returned by a query, which also reports result completeness.        |
+| Class                                     | Description                                                                                                      |
+|-------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| [SearchIndex](#searchindex-api)           | Primary class to write, read, and search across data structures in Redis.                                        |
+| [AsyncSearchIndex](#asyncsearchindex-api) | Async version of the SearchIndex to write, read, and search across data structures in Redis.                     |
+| [SearchResults](#searchresults-api)       | List of result documents returned by a query, which also reports result completeness.                            |
+| [BulkResult](#bulkresult-api)             | Outcome of a bulk operation: how many documents matched, how many were processed, and whether the run completed. |
 
 <a id="searchindex-api"></a>
 
 ## SearchIndex
 
-### `class SearchIndex(schema, redis_client=None, redis_url=None, connection_kwargs=None, validate_on_load=False, **kwargs)`
+### `class SearchIndex(schema, redis_client=None, redis_url=None, connection_kwargs=None, validate_on_load=False, owns_client=None, **kwargs)`
 
 A search index class for interacting with Redis as a vector database.
 
@@ -44,9 +45,20 @@ index.load(data)
 index.delete(drop=True)
 ```
 
-Initialize the RedisVL search index with a schema, Redis client
-(or URL string with other connection args), connection_args, and other
-kwargs.
+Pass `redis_client` to use a client you configured yourself. The index
+leaves such a client open when it is disconnected or garbage collected;
+pass `owns_client=True` to hand that responsibility over.
+
+```python
+from redis import Redis
+from redisvl.index import SearchIndex
+
+client = Redis.from_url("redis://localhost:6379", socket_timeout=5)
+index = SearchIndex.from_yaml("schemas/schema.yaml", redis_client=client)
+```
+
+Initialize the RedisVL search index with a schema and either a Redis
+client or a URL string with other connection kwargs.
 
 * **Parameters:**
   * **schema** ([*IndexSchema*]({{< relref "schema/#indexschema" >}})) – Index schema object.
@@ -58,6 +70,17 @@ kwargs.
     args.
   * **validate_on_load** (*bool* *,* *optional*) – Whether to validate data against schema
     when loading. Defaults to False.
+  * **owns_client** (*Optional* *[* *bool* *]* *,* *optional*) – Whether the index closes
+    the Redis client when the index is disconnected or garbage
+    collected. Defaults to None, meaning the index owns a client
+    only if it created one itself. Pass True to hand over a client
+    you created, or False to keep one the index would otherwise
+    close, in which case closing it becomes your responsibility.
+* **Raises:**
+  * **ValueError** – If `schema` is not an IndexSchema.
+  * **TypeError** – If `redis_client` is the wrong flavour, or if a
+        keyword that no longer exists is passed. `connection_args`
+        and `redis_kwargs` are both now `connection_kwargs`.
 
 #### `aggregate(*args, **kwargs)`
 
@@ -124,24 +147,6 @@ empty index from a sweep that deleted nothing. Re-running is safe.
 * **Return type:**
   int
 
-#### `connect(redis_url=None, **kwargs)`
-
-Connect to a Redis instance using the provided redis_url, falling
-back to the REDIS_URL environment variable (if available).
-
-Note: Additional keyword arguments (\*\*kwargs) can be used to provide
-extra options specific to the Redis connection.
-
-* **Parameters:**
-  **redis_url** (*Optional* *[* *str* *]* *,* *optional*) – The URL of the Redis server to
-  connect to.
-* **Raises:**
-  * **redis.exceptions.ConnectionError** – If the connection to the Redis
-        server fails.
-  * **ValueError** – If the Redis URL is not provided nor accessible
-        through the REDIS_URL environment variable.
-  * **ModuleNotFoundError** – If required Redis modules are not installed.
-
 #### `create(overwrite=False, drop=False)`
 
 Create an index in Redis with the current schema and properties.
@@ -188,7 +193,11 @@ as absent to keep [create](#create) away from this path.
 
 #### `disconnect()`
 
-Disconnect from the Redis database.
+Close the Redis client if this index owns it.
+
+Always invalidates the cached SQL schema. When the index does not own
+the client (see `owns_client`), the client is left open and the
+index remains usable.
 
 #### `drop_by_filter(filter_expression, *, batch_size=500, dry_run=False, allow_all=False, on_progress=None)`
 
@@ -221,10 +230,11 @@ this re-queries from offset 0 each round (the same strategy as
     the run (already-deleted documents stay deleted).
 * **Returns:**
   `matched`/`processed` counts, plus `completed`
-  (False if the runaway backstop tripped) and `dry_run`. Read the
-  fields explicitly (`result.processed`, `result.completed`).
+  (False if the runaway backstop tripped, or if the run stopped on a
+  batch it could not remove) and `dry_run`. Read the fields
+  explicitly (`result.processed`, `result.completed`).
 * **Return type:**
-  BulkResult
+  [BulkResult](#bulkresult)
 
 {{< note >}}
 [update_by_filter](#update_by_filter) (bulk partial update), [drop_documents](#drop_documents)
@@ -284,6 +294,15 @@ slots does not raise `CROSSSLOT`.
   Count of records deleted from Redis.
 * **Return type:**
   int
+
+{{< note >}}
+The returned count can be lower than the number of keys requested,
+either because a key did not exist or, on Redis Cluster, because its
+`UNLINK` failed — a per-key cluster failure is logged rather than
+raised so one bad key does not abort the batch, and the count alone
+cannot tell the two cases apart. A single key passed as a `str` is
+not batched, so a failure there does propagate to the caller.
+{{< /note >}}
 
 #### `exists()`
 
@@ -361,6 +380,13 @@ Initialize from an existing search index in Redis by index name.
     instantiated redis client.
   * **redis_url** (*Optional* *[* *str* *]*) – The URL of the Redis server to
     connect to.
+  * **owns_client** (*Optional* *[* *bool* *]* *,* *optional*) – Whether the index closes
+    the client. Defaults to True when this method created the
+    client from redis_url, and False when you supplied one.
+  * **connection_kwargs** (*Optional* *[* *Dict* *[* *str* *,* *Any* *]* *]*) – Redis client
+    connection args, used only when this method creates the
+    client from `redis_url`. Other keyword arguments are
+    treated the same way.
 * **Raises:**
   **ValueError** – If redis_url or redis_client is not provided.
 
@@ -549,20 +575,6 @@ to the redis-py ft().search() method.
 * **Return type:**
   Result
 
-#### `set_client(redis_client, **kwargs)`
-
-Manually set the Redis client to use with the search index.
-
-This method configures the search index to use a specific Redis or
-Async Redis client. It is useful for cases where an external,
-custom-configured client is preferred instead of creating a new one.
-
-* **Parameters:**
-  **redis_client** (*Redis*) – A Redis or Async Redis
-  client instance to be used for the connection.
-* **Raises:**
-  **TypeError** – If the provided client is not valid.
-
 #### `update_by_filter(filter_expression, values, *, batch_size=500, dry_run=False, allow_all=False, on_progress=None)`
 
 Set `values` on every document matching a filter expression.
@@ -610,7 +622,7 @@ search-and-indexing concepts guide).
   (always True for update — it runs to completion or raises) and
   `dry_run`.
 * **Return type:**
-  BulkResult
+  [BulkResult](#bulkresult)
 
 {{< note >}}
 [drop_by_filter](#drop_by_filter), [load](#load) (validated whole-document
@@ -676,7 +688,7 @@ hash or json.
 
 ## AsyncSearchIndex
 
-### `class AsyncSearchIndex(schema, *, redis_url=None, redis_client=None, connection_kwargs=None, validate_on_load=False, **kwargs)`
+### `class AsyncSearchIndex(schema, *, redis_url=None, redis_client=None, connection_kwargs=None, validate_on_load=False, owns_client=None, **kwargs)`
 
 A search index class for interacting with Redis as a vector database in
 async-mode.
@@ -705,6 +717,18 @@ await index.load(data)
 await index.delete(drop=True)
 ```
 
+Pass `redis_client` to use a client you configured yourself. The index
+leaves such a client open when it is disconnected or garbage collected;
+pass `owns_client=True` to hand that responsibility over.
+
+```python
+from redis.asyncio import Redis
+from redisvl.index import AsyncSearchIndex
+
+client = Redis.from_url("redis://localhost:6379", socket_timeout=5)
+index = AsyncSearchIndex.from_yaml("schemas/schema.yaml", redis_client=client)
+```
+
 Initialize the RedisVL async search index with a schema.
 
 * **Parameters:**
@@ -717,6 +741,17 @@ Initialize the RedisVL async search index with a schema.
     args.
   * **validate_on_load** (*bool* *,* *optional*) – Whether to validate data against schema
     when loading. Defaults to False.
+  * **owns_client** (*Optional* *[* *bool* *]* *,* *optional*) – Whether the index closes
+    the Redis client when the index is disconnected or garbage
+    collected. Defaults to None, meaning the index owns a client
+    only if it created one itself. Pass True to hand over a client
+    you created, or False to keep one the index would otherwise
+    close, in which case closing it becomes your responsibility.
+* **Raises:**
+  * **ValueError** – If `schema` is not an IndexSchema.
+  * **TypeError** – If `redis_client` is the wrong flavour, or if a
+        keyword that no longer exists is passed. `connection_args`
+        and `redis_kwargs` are both now `connection_kwargs`.
 
 #### `async aggregate(*args, **kwargs)`
 
@@ -787,13 +822,6 @@ identically here.
 * **Return type:**
   int
 
-#### `connect(redis_url=None, **kwargs)`
-
-[DEPRECATED] Connect to a Redis instance. Use connection parameters in \_\_init_\_.
-
-* **Parameters:**
-  **redis_url** (*str* *|* *None*)
-
 #### `async create(overwrite=False, drop=False)`
 
 Asynchronously create an index in Redis with the current schema
@@ -840,7 +868,21 @@ as absent to keep [create](#create) away from this path.
 
 #### `async disconnect()`
 
-Disconnect from the Redis database.
+Close the Redis client if this index owns it.
+
+Always invalidates the cached SQL schema. When the index does not own
+the client (see `owns_client`), the client is left open and the
+index remains usable.
+
+#### `disconnect_sync()`
+
+Close an owned Redis client from synchronous code.
+
+For callers outside an event loop, such as `__del__` or a shutdown
+hook. Honours `owns_client` exactly as [disconnect](#disconnect) does.
+
+Does nothing if a loop is already running, since it cannot await the
+close from inside one. Use [disconnect](#disconnect) there.
 
 #### `async drop_by_filter(filter_expression, *, batch_size=500, dry_run=False, allow_all=False, on_progress=None)`
 
@@ -855,7 +897,7 @@ See [drop_by_filter](#drop_by_filter) for full semantics.
   * **allow_all** (*bool*)
   * **on_progress** (*Callable* *[* *[* *int* *,* *int* *]* *,* *None* *]*  *|* *None*)
 * **Return type:**
-  *BulkResult*
+  [BulkResult](#bulkresult)
 
 #### `async drop_documents(ids, batch_size=500)`
 
@@ -901,6 +943,15 @@ slots does not raise `CROSSSLOT`.
   Count of records deleted from Redis.
 * **Return type:**
   int
+
+{{< note >}}
+The returned count can be lower than the number of keys requested,
+either because a key did not exist or, on Redis Cluster, because its
+`UNLINK` failed — a per-key cluster failure is logged rather than
+raised so one bad key does not abort the batch, and the count alone
+cannot tell the two cases apart. A single key passed as a `str` is
+not batched, so a failure there does propagate to the caller.
+{{< /note >}}
 
 #### `async exists()`
 
@@ -976,6 +1027,13 @@ Initialize from an existing search index in Redis by index name.
     instantiated redis client.
   * **redis_url** (*Optional* *[* *str* *]*) – The URL of the Redis server to
     connect to.
+  * **owns_client** (*Optional* *[* *bool* *]* *,* *optional*) – Whether the index closes
+    the client. Defaults to True when this method created the
+    client from redis_url, and False when you supplied one.
+  * **connection_kwargs** (*Optional* *[* *Dict* *[* *str* *,* *Any* *]* *]*) – Redis client
+    connection args, used only when this method creates the
+    client from `redis_url`. Other keyword arguments are
+    treated the same way.
 
 #### `classmethod from_yaml(schema_path, **kwargs)`
 
@@ -1182,14 +1240,6 @@ to the redis-py ft().search() method.
 * **Return type:**
   Result
 
-#### `set_client(redis_client)`
-
-[DEPRECATED] Manually set the Redis client to use with the search index.
-This method is deprecated; please provide connection parameters in \_\_init_\_.
-
-* **Parameters:**
-  **redis_client** (*Redis* *|* *RedisCluster* *|* *Redis* *|* *RedisCluster*)
-
 #### `async update_by_filter(filter_expression, values, *, batch_size=500, dry_run=False, allow_all=False, on_progress=None)`
 
 Set `values` on every document matching a filter expression (async).
@@ -1204,7 +1254,7 @@ See [update_by_filter](#update_by_filter) for full semantics.
   * **allow_all** (*bool*)
   * **on_progress** (*Callable* *[* *[* *int* *,* *int* *]* *,* *None* *]*  *|* *None*)
 * **Return type:**
-  *BulkResult*
+  [BulkResult](#bulkresult)
 
 #### `property client: Redis | RedisCluster | None`
 
@@ -1267,3 +1317,57 @@ can ignore them. Note that operations returning a new list (slicing,
 #### `property complete: bool`
 
 True when no matched documents were dropped from this result set.
+
+<a id="bulkresult-api"></a>
+
+## BulkResult
+
+### `class BulkResult(matched, processed, completed=True, dry_run=False)`
+
+Outcome of a bulk operation ([drop_by_filter](#drop_by_filter) /
+[update_by_filter](#update_by_filter)).
+
+Because bulk operations are not atomic across the match set, the result
+distinguishes how many documents matched from how many were actually
+processed, and whether the run ran to completion. Read the fields
+explicitly (`result.processed` / `result.matched` / `result.completed`).
+
+* **Parameters:**
+  * **matched** (*int*)
+  * **processed** (*int*)
+  * **completed** (*bool*)
+  * **dry_run** (*bool*)
+
+#### `matched`
+
+Documents matching the filter when the run started.
+
+* **Type:**
+  int
+
+#### `processed`
+
+Documents actually deleted/updated (for `dry_run`,
+the number that *would* be processed).
+
+* **Type:**
+  int
+
+#### `completed`
+
+False if the run stopped early — a delete hit its
+runaway backstop under heavy concurrent inserts, or a delete batch
+twice removed nothing (its keys failed to delete, or the index is
+listing documents whose keys are already gone). Re-run to finish;
+check the logged warning first, since the second case will not
+resolve itself.
+
+* **Type:**
+  bool
+
+#### `dry_run`
+
+True if this was a preview and nothing was mutated.
+
+* **Type:**
+  bool

@@ -197,7 +197,10 @@ in sequential ordering after retrieval.
 
 #### `property messages: list[str] | list[dict[str, str]]`
 
-Returns the full message history.
+Returns every message in the current session, oldest first.
+
+The result is not bounded. For a bounded read of the latest messages,
+use `get_recent(top_k=...)`.
 
 ## MessageHistory
 
@@ -347,4 +350,7 @@ in sequential ordering after retrieval.
 
 #### `property messages: list[str] | list[dict[str, str]]`
 
-Returns the full message history.
+Returns every message in the current session, oldest first.
+
+The result is not bounded. For a bounded read of the latest messages,
+use `get_recent(top_k=...)`.
